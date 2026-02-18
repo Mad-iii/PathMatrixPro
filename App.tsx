@@ -324,7 +324,7 @@ const App: React.FC = () => {
             </>
           )}
         </div>
-      </header>
+      
 
       {/* Main Layout */}
       <main className="flex-1 flex flex-col md:flex-row p-6 gap-6 overflow-hidden">
