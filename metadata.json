@@ -1,0 +1,5 @@
+{
+  "name": "PathMatrix Pro",
+  "description": "A high-performance interactive AI pathfinding visualizer featuring BFS, DFS, UCS, DLS, IDDFS, and Bidirectional search with dynamic obstacle support.",
+  "requestFramePermissions": []
+}
