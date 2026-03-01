@@ -16,7 +16,14 @@ export enum Algorithm {
   UCS = 'UCS',
   DLS = 'DLS',
   IDDFS = 'IDDFS',
-  BIDIRECTIONAL = 'Bidirectional'
+  BIDIRECTIONAL = 'Bidirectional',
+  GBFS = 'GBFS',
+  ASTAR = 'A*'
+}
+
+export enum Heuristic {
+  MANHATTAN = 'Manhattan',
+  EUCLIDEAN = 'Euclidean'
 }
 
 export interface CellData {

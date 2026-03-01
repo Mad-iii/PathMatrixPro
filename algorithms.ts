@@ -1,11 +1,12 @@
 
-import { CellType, VizStep } from './types';
+import { CellType, VizStep, Heuristic } from './types';
 import { ROWS, COLS } from './constants';
 
 export const key = (r: number, c: number) => `${r},${c}`;
 export const parseKey = (k: string) => k.split(",").map(Number);
 
-const inBounds = (r: number, c: number) => r >= 0 && r < ROWS && c >= 0 && c < COLS;
+const inBounds = (r: number, c: number, rows: number, cols: number) => 
+  r >= 0 && r < rows && c >= 0 && c < cols;
 
 // 8-directional movement
 const DIRS = [
@@ -14,10 +15,12 @@ const DIRS = [
 ];
 
 const getNeighbors = (grid: any[][], r: number, c: number) => {
+  const rows = grid.length;
+  const cols = grid[0].length;
   const result: [number, number][] = [];
   for (const [dr, dc] of DIRS) {
     const nr = r + dr, nc = c + dc;
-    if (inBounds(nr, nc)) {
+    if (inBounds(nr, nc, rows, cols)) {
       const type = grid[nr][nc].type;
       if (type !== CellType.WALL && type !== CellType.DYNAMIC) {
         result.push([nr, nc]);
@@ -29,6 +32,14 @@ const getNeighbors = (grid: any[][], r: number, c: number) => {
 
 const cost = (r1: number, c1: number, r2: number, c2: number) => 
   Math.abs(r1 - r2) === 1 && Math.abs(c1 - c2) === 1 ? 1.414 : 1;
+
+export const getHeuristic = (r1: number, c1: number, r2: number, c2: number, type: Heuristic) => {
+  if (type === Heuristic.MANHATTAN) {
+    return Math.abs(r1 - r2) + Math.abs(c1 - c2);
+  } else {
+    return Math.sqrt(Math.pow(r1 - r2, 2) + Math.pow(c1 - c2, 2));
+  }
+};
 
 const reconstructPath = (came: Record<string, string>, start: string, end: string) => {
   const path: string[] = [];
@@ -118,6 +129,64 @@ export function* ucsGen(grid: any[][], start: string, end: string) {
   return null;
 }
 
+export function* gbfsGen(grid: any[][], start: string, end: string, heuristic: Heuristic) {
+  const [tr, tc] = parseKey(end);
+  let pq = [{ k: start, h: getHeuristic(...parseKey(start) as [number, number], tr, tc, heuristic) }];
+  const visited = new Set<string>();
+  const came: Record<string, string> = {};
+
+  while (pq.length) {
+    pq.sort((a, b) => a.h - b.h);
+    const { k: cur } = pq.shift()!;
+    if (visited.has(cur)) continue;
+    visited.add(cur);
+
+    yield { frontier: pq.map(x => x.k), explored: Array.from(visited), current: cur } as VizStep;
+    if (cur === end) return reconstructPath(came, start, end);
+
+    const [r, c] = parseKey(cur);
+    for (const [nr, nc] of getNeighbors(grid, r, c)) {
+      const nk = key(nr, nc);
+      if (!visited.has(nk)) {
+        came[nk] = cur;
+        pq.push({ k: nk, h: getHeuristic(nr, nc, tr, tc, heuristic) });
+      }
+    }
+  }
+  return null;
+}
+
+export function* astarGen(grid: any[][], start: string, end: string, heuristic: Heuristic) {
+  const [tr, tc] = parseKey(end);
+  let pq = [{ k: start, g: 0, f: getHeuristic(...parseKey(start) as [number, number], tr, tc, heuristic) }];
+  const visited = new Set<string>();
+  const gMap: Record<string, number> = { [start]: 0 };
+  const came: Record<string, string> = {};
+
+  while (pq.length) {
+    pq.sort((a, b) => a.f - b.f);
+    const { k: cur, g: curG } = pq.shift()!;
+    if (visited.has(cur)) continue;
+    visited.add(cur);
+
+    yield { frontier: pq.map(x => x.k), explored: Array.from(visited), current: cur } as VizStep;
+    if (cur === end) return reconstructPath(came, start, end);
+
+    const [r, c] = parseKey(cur);
+    for (const [nr, nc] of getNeighbors(grid, r, c)) {
+      const nk = key(nr, nc);
+      const newG = curG + cost(r, c, nr, nc);
+      if (!visited.has(nk) && (gMap[nk] === undefined || newG < gMap[nk])) {
+        gMap[nk] = newG;
+        came[nk] = cur;
+        const f = newG + getHeuristic(nr, nc, tr, tc, heuristic);
+        pq.push({ k: nk, g: newG, f });
+      }
+    }
+  }
+  return null;
+}
+
 export function* dlsGen(grid: any[][], start: string, end: string, limit = 15) {
   const stack = [{ k: start, depth: 0 }];
   const visited = new Map<string, number>(); // key -> minDepth
@@ -145,7 +214,9 @@ export function* dlsGen(grid: any[][], start: string, end: string, limit = 15) {
 }
 
 export function* iddfsGen(grid: any[][], start: string, end: string) {
-  for (let limit = 0; limit < ROWS * COLS; limit += 2) {
+  const rows = grid.length;
+  const cols = grid[0].length;
+  for (let limit = 0; limit < rows * cols; limit += 2) {
     const gen = dlsGen(grid, start, end, limit);
     let step;
     while (!(step = gen.next()).done) {

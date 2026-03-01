@@ -5,34 +5,37 @@ import {
   CellType, 
   CellData, 
   Stats, 
-  VizStep 
+  VizStep,
+  Heuristic
 } from './types';
 import { 
-  ROWS, 
-  COLS, 
   CELL_SIZE, 
   ALGO_INFO, 
   COLORS 
 } from './constants';
 import * as Algs from './algorithms';
 
-const createInitialGrid = () => {
-  return Array.from({ length: ROWS }, (_, r) =>
-    Array.from({ length: COLS }, (_, c) => ({ type: CellType.EMPTY, r, c }))
+const createInitialGrid = (rows: number, cols: number) => {
+  return Array.from({ length: rows }, (_, r) =>
+    Array.from({ length: cols }, (_, c) => ({ type: CellType.EMPTY, r, c }))
   );
 };
 
 const App: React.FC = () => {
-  const [grid, setGrid] = useState<CellData[][]>(createInitialGrid);
+  const [rows, setRows] = useState(20);
+  const [cols, setCols] = useState(30);
+  const [grid, setGrid] = useState<CellData[][]>(() => createInitialGrid(20, 30));
   const [startCell, setStartCell] = useState<string | null>(null);
   const [endCell, setEndCell] = useState<string | null>(null);
-  const [algo, setAlgo] = useState<Algorithm>(Algorithm.BFS);
+  const [algo, setAlgo] = useState<Algorithm>(Algorithm.ASTAR);
+  const [heuristic, setHeuristic] = useState<Heuristic>(Heuristic.MANHATTAN);
   const [running, setRunning] = useState(false);
   const [done, setDone] = useState(false);
   const [stats, setStats] = useState<Stats | null>(null);
   const [mode, setMode] = useState<'wall' | 'start' | 'end'>('wall');
   const [speed, setSpeed] = useState(30);
-  const [dynProb, setDynProb] = useState(0.005);
+  const [dynProb, setDynProb] = useState(0.01);
+  const [obstacleDensity, setObstacleDensity] = useState(0.3);
   const [stepCount, setStepCount] = useState(0);
   const [statusMsg, setStatusMsg] = useState("Configure grid then click Run.");
   const [mouseDown, setMouseDown] = useState(false);
@@ -42,6 +45,8 @@ const App: React.FC = () => {
   const gridRef = useRef(grid);
   const startRef = useRef(startCell);
   const endRef = useRef(endCell);
+  const currentPathRef = useRef<string[]>([]);
+  const agentPosRef = useRef<string | null>(null);
 
   useEffect(() => { gridRef.current = grid; }, [grid]);
   useEffect(() => { startRef.current = startCell; }, [startCell]);
@@ -55,30 +60,37 @@ const App: React.FC = () => {
     setRunning(false);
   }, []);
 
-  const clearVisualization = useCallback(() => {
+  const clearVisualization = useCallback((keepWalls = true) => {
     setGrid(prev => prev.map(row => 
       row.map(cell => {
         if ([CellType.FRONTIER, CellType.EXPLORED, CellType.PATH].includes(cell.type)) {
           return { ...cell, type: CellType.EMPTY };
         }
+        if (!keepWalls && cell.type === CellType.WALL) return { ...cell, type: CellType.EMPTY };
         return cell;
       })
     ));
     setDone(false);
     setStats(null);
     setStepCount(0);
+    currentPathRef.current = [];
+    agentPosRef.current = null;
   }, []);
 
   const resetAll = useCallback(() => {
     stopSearch();
-    setGrid(createInitialGrid());
+    setGrid(createInitialGrid(rows, cols));
     setStartCell(null);
     setEndCell(null);
     setDone(false);
     setStats(null);
     setStepCount(0);
     setStatusMsg("Grid reset. Draw walls or set start/target.");
-  }, [stopSearch]);
+  }, [stopSearch, rows, cols]);
+
+  useEffect(() => {
+    resetAll();
+  }, [rows, cols]);
 
   const handleCellAction = useCallback((r: number, c: number) => {
     if (running) return;
@@ -93,14 +105,14 @@ const App: React.FC = () => {
       } else if (mode === 'start') {
         if (startRef.current) {
           const [sr, sc] = Algs.parseKey(startRef.current);
-          next[sr][sc].type = CellType.EMPTY;
+          if (next[sr] && next[sr][sc]) next[sr][sc].type = CellType.EMPTY;
         }
         target.type = CellType.START;
         setStartCell(k);
       } else if (mode === 'end') {
         if (endRef.current) {
           const [er, ec] = Algs.parseKey(endRef.current);
-          next[er][ec].type = CellType.EMPTY;
+          if (next[er] && next[er][ec]) next[er][ec].type = CellType.EMPTY;
         }
         target.type = CellType.END;
         setEndCell(k);
@@ -111,26 +123,31 @@ const App: React.FC = () => {
 
   const generateMaze = useCallback(() => {
     if (running) return;
-    const next = createInitialGrid();
-    for (let r = 0; r < ROWS; r++) {
-      for (let c = 0; c < COLS; c++) {
-        if (Math.random() < 0.28) next[r][c].type = CellType.WALL;
+    const next = createInitialGrid(rows, cols);
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        if (Math.random() < obstacleDensity) next[r][c].type = CellType.WALL;
       }
     }
     setGrid(next);
     setStartCell(null);
     setEndCell(null);
-    setStatusMsg("Random maze generated.");
-  }, [running]);
+    setStatusMsg(`Random maze generated with ${Math.round(obstacleDensity * 100)}% density.`);
+  }, [running, rows, cols, obstacleDensity]);
 
-  const runSearch = useCallback(() => {
-    if (!startRef.current || !endRef.current) {
+  const runSearch = useCallback((fromPos?: string) => {
+    const start = fromPos || startRef.current;
+    if (!start || !endRef.current) {
       setStatusMsg("Set Start and Target points first!");
       return;
     }
-    stopSearch();
-    clearVisualization();
-    setRunning(true);
+    
+    if (!fromPos) {
+      stopSearch();
+      clearVisualization();
+      setRunning(true);
+    }
+    
     setStatusMsg(`Running ${algo}...`);
 
     let workingGrid = gridRef.current.map(row => row.map(cell => ({ ...cell })));
@@ -140,31 +157,43 @@ const App: React.FC = () => {
       case Algorithm.BFS: genFn = Algs.bfsGen; break;
       case Algorithm.DFS: genFn = Algs.dfsGen; break;
       case Algorithm.UCS: genFn = Algs.ucsGen; break;
+      case Algorithm.GBFS: genFn = (g: any, s: any, e: any) => Algs.gbfsGen(g, s, e, heuristic); break;
+      case Algorithm.ASTAR: genFn = (g: any, s: any, e: any) => Algs.astarGen(g, s, e, heuristic); break;
       case Algorithm.DLS: genFn = Algs.dlsGen; break;
       case Algorithm.IDDFS: genFn = Algs.iddfsGen; break;
       case Algorithm.BIDIRECTIONAL: genFn = Algs.bidirectionalGen; break;
       default: genFn = Algs.bfsGen;
     }
 
-    genRef.current = genFn(workingGrid, startRef.current, endRef.current);
+    genRef.current = genFn(workingGrid, start, endRef.current);
     const startTime = performance.now();
-    let currentSteps = 0;
+    let currentSteps = stepCount;
+
+    if (intervalRef.current) clearInterval(intervalRef.current);
 
     intervalRef.current = window.setInterval(() => {
       // Dynamic obstacle logic
       if (Math.random() < dynProb) {
-        const dr = Math.floor(Math.random() * ROWS);
-        const dc = Math.floor(Math.random() * COLS);
+        const dr = Math.floor(Math.random() * rows);
+        const dc = Math.floor(Math.random() * cols);
         if (workingGrid[dr][dc].type === CellType.EMPTY) {
           workingGrid[dr][dc].type = CellType.DYNAMIC;
+          const dk = Algs.key(dr, dc);
+          
           setGrid(prev => {
-            const ng = [...prev];
-            ng[dr] = [...ng[dr]];
-            ng[dr][dc] = { ...ng[dr][dc], type: CellType.DYNAMIC };
+            const ng = prev.map(row => row.map(cell => ({...cell})));
+            ng[dr][dc].type = CellType.DYNAMIC;
             return ng;
           });
-          setStatusMsg("Obstacle dynamically spawned! Re-calculating...");
-          // In a real replanning scenario, we might restart the gen with current state
+
+          // Re-planning check: if obstacle is on the current path
+          if (currentPathRef.current.includes(dk)) {
+            setStatusMsg("Obstacle blocked path! Re-planning...");
+            if (agentPosRef.current) {
+              runSearch(agentPosRef.current);
+              return;
+            }
+          }
         }
       }
 
@@ -174,24 +203,53 @@ const App: React.FC = () => {
 
       if (res.done) {
         const elapsed = performance.now() - startTime;
-        stopSearch();
-        setDone(true);
         if (res.value) {
           const path = res.value as string[];
+          currentPathRef.current = path;
           setStats({ 
             steps: currentSteps, 
             time: elapsed.toFixed(1), 
             pathLen: path.length 
           });
-          setStatusMsg(`Path found! Length: ${path.length}`);
-          setGrid(prev => prev.map(row => row.map(cell => {
-            const k = Algs.key(cell.r, cell.c);
-            if (path.includes(k) && cell.type !== CellType.START && cell.type !== CellType.END) {
-              return { ...cell, type: CellType.PATH };
+          setStatusMsg(`Path found! Length: ${path.length}. Agent moving...`);
+          
+          // Start agent movement simulation
+          let pathIdx = 0;
+          if (intervalRef.current) clearInterval(intervalRef.current);
+          
+          intervalRef.current = window.setInterval(() => {
+            if (pathIdx >= path.length) {
+              stopSearch();
+              setDone(true);
+              setStatusMsg("Goal reached!");
+              return;
             }
-            return cell;
-          })));
+
+            const pos = path[pathIdx];
+            agentPosRef.current = pos;
+            const [pr, pc] = Algs.parseKey(pos);
+            
+            // Check if current position was hit by dynamic obstacle
+            if (gridRef.current[pr][pc].type === CellType.DYNAMIC) {
+               setStatusMsg("Agent hit by obstacle! Re-planning...");
+               runSearch(path[Math.max(0, pathIdx - 1)]);
+               return;
+            }
+
+            setGrid(prev => prev.map(row => row.map(cell => {
+              const k = Algs.key(cell.r, cell.c);
+              if (k === pos) return { ...cell, type: CellType.START };
+              if (path.includes(k) && cell.type !== CellType.START && cell.type !== CellType.END) {
+                return { ...cell, type: CellType.PATH };
+              }
+              return cell;
+            })));
+            pathIdx++;
+          }, speed);
+
         } else {
+          stopSearch();
+          setDone(true);
           setStatusMsg("No path possible.");
           setStats({ steps: currentSteps, time: elapsed.toFixed(1), pathLen: 0 });
         }
@@ -212,7 +270,7 @@ const App: React.FC = () => {
       })));
 
     }, speed);
-  }, [algo, speed, dynProb, stopSearch, clearVisualization]);
+  }, [algo, heuristic, speed, dynProb, rows, cols, stepCount, stopSearch, clearVisualization]);
 
   return (
     <div className="min-h-screen bg-[#0d1117] text-[#c9d1d9] flex flex-col font-mono-custom selection:bg-blue-500/30">
@@ -254,7 +312,7 @@ const App: React.FC = () => {
             Maze
           </button>
           <button 
-            onClick={running ? stopSearch : runSearch}
+            onClick={running ? stopSearch : () => runSearch()}
             className={`${running ? 'bg-red-600 hover:bg-red-500' : 'bg-blue-600 hover:bg-blue-500'} text-white px-6 py-1.5 rounded text-xs font-bold transition-colors`}
           >
             {running ? 'Stop' : 'Run Search'}
@@ -326,6 +384,50 @@ const App: React.FC = () => {
         </div>
       </div>
 
+      {/* Settings Bar */}
+      <div className="bg-[#0d1117] border-b border-[#30363d] px-6 py-2 flex flex-wrap items-center gap-8 text-[11px] text-[#8b949e]">
+        <div className="flex items-center gap-3">
+          <span className="uppercase tracking-tighter font-bold text-[#58a6ff]">Grid:</span>
+          <div className="flex items-center gap-2">
+            <input 
+              type="number" min="5" max="50" value={rows} 
+              onChange={e => setRows(Math.min(50, Math.max(5, +e.target.value)))}
+              className="w-12 bg-[#161b22] border border-[#30363d] rounded px-1 text-white"
+            />
+            <span>x</span>
+            <input 
+              type="number" min="5" max="80" value={cols} 
+              onChange={e => setCols(Math.min(80, Math.max(5, +e.target.value)))}
+              className="w-12 bg-[#161b22] border border-[#30363d] rounded px-1 text-white"
+            />
+          </div>
+        </div>
+
+        <div className="flex items-center gap-3">
+          <span className="uppercase tracking-tighter font-bold text-[#58a6ff]">Heuristic:</span>
+          <select 
+            value={heuristic} 
+            onChange={e => setHeuristic(e.target.value as Heuristic)}
+            className="bg-[#161b22] border border-[#30363d] rounded px-2 py-1 text-white outline-none"
+          >
+            {Object.values(Heuristic).map(h => (
+              <option key={h} value={h}>{h}</option>
+            ))}
+          </select>
+        </div>
+
+        <div className="flex items-center gap-3">
+          <span className="uppercase tracking-tighter font-bold text-[#58a6ff]">Density:</span>
+          <input 
+            type="range" min="0" max="80" 
+            value={obstacleDensity * 100} 
+            onChange={e => setObstacleDensity(+e.target.value / 100)}
+            className="w-24 accent-emerald-500"
+          />
+          <span>{Math.round(obstacleDensity * 100)}%</span>
+        </div>
+      </div>
+
       {/* Main Layout */}
       <main className="flex-1 flex flex-col md:flex-row p-6 gap-6 overflow-hidden">
         {/* Info Sidebar */}
@@ -363,7 +465,7 @@ const App: React.FC = () => {
             <div 
               className="grid gap-[1px] bg-[#30363d] border border-[#30363d]"
               style={{ 
-                gridTemplateColumns: `repeat(${COLS}, ${CELL_SIZE}px)`,
+                gridTemplateColumns: `repeat(${cols}, ${CELL_SIZE}px)`,
                 userSelect: 'none'
               }}
               onMouseDown={() => setMouseDown(true)}

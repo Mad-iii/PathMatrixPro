@@ -29,6 +29,14 @@ export const ALGO_INFO: Record<Algorithm, { label: string; desc: string }> = {
   [Algorithm.BIDIRECTIONAL]: {
     label: "Bidirectional Search",
     desc: "Runs two simultaneous searches: one from start and one from end to meet in the middle."
+  },
+  [Algorithm.GBFS]: {
+    label: "Greedy Best-First Search",
+    desc: "Uses only the heuristic evaluation f(n) = h(n) to prioritize nodes closer to the goal."
+  },
+  [Algorithm.ASTAR]: {
+    label: "A* Search",
+    desc: "Uses f(n) = g(n) + h(n) to find the shortest path efficiently using heuristics."
   }
 };
 
